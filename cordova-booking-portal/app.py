@@ -1,12 +1,12 @@
 # app.py
 import streamlit as st
+import streamlit.components.v1 as components
 from config.settings import SESSION_KEYS
-
-# -------------------------
-# Supabase setup (needed here to read magic link tokens)
-# -------------------------
 from supabase import create_client
 
+# -------------------------
+# Supabase setup
+# -------------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -17,47 +17,108 @@ st.set_page_config(
 )
 
 # -------------------------
-# NEW Helper: Handle magic link return tokens
+# NEW Step 0: Move tokens from URL hash (#) to query (?)
+# Streamlit can't read hash, so we convert it.
+# -------------------------
+def normalize_magic_link_url():
+    components.html(
+        """
+        <script>
+        const hash = window.location.hash.substring(1);
+        if (hash && hash.includes("access_token")) {
+            const params = new URLSearchParams(hash);
+            const access_token = params.get("access_token");
+            const refresh_token = params.get("refresh_token");
+            const type = params.get("type") || "magiclink";
+
+            if (access_token && refresh_token) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("access_token", access_token);
+                url.searchParams.set("refresh_token", refresh_token);
+                url.searchParams.set("type", type);
+                url.hash = "";
+                window.location.replace(url.toString());
+            }
+        }
+        </script>
+        """,
+        height=0
+    )
+
+normalize_magic_link_url()
+
+# -------------------------
+# NEW Step 1: Handle magic link return
+# Works for both PKCE (?code=) or implicit (?access_token=)
 # -------------------------
 def handle_magic_login():
-    access_token = st.query_params.get("access_token")
-    refresh_token = st.query_params.get("refresh_token")
-    link_type = st.query_params.get("type")
+    qp = st.query_params
 
-    # Only run when user comes from magic link
-    if access_token and refresh_token and link_type == "magiclink":
-        try:
+    code = qp.get("code")
+    access_token = qp.get("access_token")
+    refresh_token = qp.get("refresh_token")
+
+    try:
+        # PKCE flow (if Supabase returns ?code=...)
+        if code:
+            supabase.auth.exchange_code_for_session(code)
+
+        # Implicit flow (after normalize_magic_link_url)
+        elif access_token and refresh_token:
             supabase.auth.set_session(access_token, refresh_token)
-            user_res = supabase.auth.get_user()
 
-            if user_res and user_res.user:
-                # Store login in session
-                st.session_state[SESSION_KEYS["logged_in"]] = True
-                st.session_state[SESSION_KEYS["user_email"]] = user_res.user.email
+        else:
+            return  # nothing to do
 
-                # If your login page stores a "user_row",
-                # you can fetch it here too (optional but recommended)
+        user_res = supabase.auth.get_user()
+        if not user_res or not user_res.user:
+            return
+
+        email = user_res.user.email
+
+        # Mark logged in
+        st.session_state[SESSION_KEYS["logged_in"]] = True
+        st.session_state[SESSION_KEYS["user_email"]] = email
+
+        # ---- Try to get role from metadata first ----
+        role = None
+        try:
+            role = (user_res.user.app_metadata or {}).get("role") \
+                or (user_res.user.user_metadata or {}).get("role")
+        except:
+            pass
+
+        # ---- If no role in metadata, fetch from DB tables ----
+        user_row = None
+        if not role:
+            for table in ["profiles", "users", "admins", "salespersons", "rp_users"]:
                 try:
-                    row = (
-                        supabase.table("profiles")
+                    r = (
+                        supabase.table(table)
                         .select("*")
-                        .eq("email", user_res.user.email)
+                        .eq("email", email)
                         .single()
                         .execute()
                     )
-                    if row.data:
-                        st.session_state[SESSION_KEYS["user_row"]] = row.data
+                    if r.data:
+                        user_row = r.data
+                        role = (user_row.get("role") or "").lower()
+                        break
                 except:
-                    pass
+                    continue
 
-                # Clean URL (remove tokens)
-                st.query_params.clear()
-                st.rerun()
+        if user_row:
+            st.session_state[SESSION_KEYS["user_row"]] = user_row
+        else:
+            st.session_state[SESSION_KEYS["user_row"]] = {"email": email, "role": role or ""}
 
-        except Exception as e:
-            st.error(f"Magic link login failed: {e}")
+        # Clear URL tokens
+        st.query_params.clear()
+        st.rerun()
 
-# ✅ Run this BEFORE redirect check
+    except Exception as e:
+        st.error(f"Magic link login failed: {e}")
+
 handle_magic_login()
 
 # -------------------------
@@ -75,7 +136,6 @@ def redirect_if_logged_in():
         elif role == "rp":
             st.switch_page("pages/4_RP.py")
         else:
-            # If role is missing or unknown, send to login
             st.switch_page("pages/1_Login.py")
 
 redirect_if_logged_in()
