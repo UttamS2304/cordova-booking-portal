@@ -1,5 +1,6 @@
 # pages/1_Login.py
 import streamlit as st
+import streamlit.components.v1 as components
 from config.settings import ROLES, SESSION_KEYS
 from utils.auth import (
     send_magic_link,
@@ -14,6 +15,39 @@ st.set_page_config(page_title="Login | Cordova Booking Portal", layout="centered
 st.title("Cordova Publications Online Booking Portal")
 st.subheader("Login")
 
+supabase = get_supabase()
+
+# --------------------------------------------------------
+# NEW Step 0: Convert #access_token... into ?access_token...
+# Streamlit cannot read anything after '#'
+# --------------------------------------------------------
+def normalize_magic_link_url():
+    components.html(
+        """
+        <script>
+        const hash = window.location.hash.substring(1);
+        if (hash && hash.includes("access_token")) {
+            const params = new URLSearchParams(hash);
+            const access_token = params.get("access_token");
+            const refresh_token = params.get("refresh_token");
+            const type = params.get("type") || "magiclink";
+
+            if (access_token && refresh_token) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("access_token", access_token);
+                url.searchParams.set("refresh_token", refresh_token);
+                url.searchParams.set("type", type);
+                url.hash = "";
+                window.location.replace(url.toString());
+            }
+        }
+        </script>
+        """,
+        height=0
+    )
+
+normalize_magic_link_url()
+
 # ------------------------------
 # If already logged in
 # ------------------------------
@@ -25,26 +59,40 @@ if st.session_state.get(SESSION_KEYS["logged_in"]):
         st.rerun()
     st.stop()
 
-# ------------------------------
-# MAGIC LINK HANDLER (AUTO LOGIN)
-# ------------------------------
+# --------------------------------------------------------
+# NEW Step 1: MAGIC LINK HANDLER (AUTO LOGIN)
+# Works for:
+#   A) implicit flow (?access_token=...)
+#   B) PKCE flow (?code=...)
+# --------------------------------------------------------
 query_params = st.query_params
 access_token = query_params.get("access_token")
 refresh_token = query_params.get("refresh_token")
+code = query_params.get("code")
 
-if access_token and refresh_token:
+if code or (access_token and refresh_token):
     try:
-        supabase = get_supabase()
-        supabase.auth.set_session(access_token, refresh_token)
+        # PKCE (if Supabase sends ?code=...)
+        if code:
+            supabase.auth.exchange_code_for_session(code)
+
+        # Implicit (after normalize_magic_link_url)
+        elif access_token and refresh_token:
+            supabase.auth.set_session(access_token, refresh_token)
 
         auth_user_obj = supabase.auth.get_user().user
         email = auth_user_obj.email
 
-        # Role intent saved before sending magic link
-        role = st.session_state.get("login_role_intent", "salesperson")
+        # Role chosen BEFORE sending magic link (may be missing on return)
+        role_intent = st.session_state.get("login_role_intent")
 
-        # Ensure public.users row exists
-        user_row = ensure_public_user(email, role)
+        # Ensure public.users row exists.
+        # If role_intent missing, default salesperson BUT do not overwrite existing role.
+        user_row = ensure_public_user(email, role_intent or "salesperson")
+
+        # If DB already has a role, trust that
+        db_role = (user_row.get("role") or "").lower()
+        role = db_role if db_role else (role_intent or "salesperson")
 
         if not user_row.get("is_active"):
             st.warning("Your account is pending admin approval.")
@@ -107,8 +155,6 @@ else:
         if not admin_email or not admin_password:
             st.error("Enter email and password.")
         else:
-            supabase = get_supabase()
-
             res = (
                 supabase.table("users")
                 .select("*")
