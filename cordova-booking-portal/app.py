@@ -2,10 +2,63 @@
 import streamlit as st
 from config.settings import SESSION_KEYS
 
+# -------------------------
+# Supabase setup (needed here to read magic link tokens)
+# -------------------------
+from supabase import create_client
+
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
 st.set_page_config(
     page_title="Cordova Publications | Online Booking Portal",
     layout="wide"
 )
+
+# -------------------------
+# NEW Helper: Handle magic link return tokens
+# -------------------------
+def handle_magic_login():
+    access_token = st.query_params.get("access_token")
+    refresh_token = st.query_params.get("refresh_token")
+    link_type = st.query_params.get("type")
+
+    # Only run when user comes from magic link
+    if access_token and refresh_token and link_type == "magiclink":
+        try:
+            supabase.auth.set_session(access_token, refresh_token)
+            user_res = supabase.auth.get_user()
+
+            if user_res and user_res.user:
+                # Store login in session
+                st.session_state[SESSION_KEYS["logged_in"]] = True
+                st.session_state[SESSION_KEYS["user_email"]] = user_res.user.email
+
+                # If your login page stores a "user_row",
+                # you can fetch it here too (optional but recommended)
+                try:
+                    row = (
+                        supabase.table("profiles")
+                        .select("*")
+                        .eq("email", user_res.user.email)
+                        .single()
+                        .execute()
+                    )
+                    if row.data:
+                        st.session_state[SESSION_KEYS["user_row"]] = row.data
+                except:
+                    pass
+
+                # Clean URL (remove tokens)
+                st.query_params.clear()
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"Magic link login failed: {e}")
+
+# ✅ Run this BEFORE redirect check
+handle_magic_login()
 
 # -------------------------
 # Helper: Redirect logged-in users
