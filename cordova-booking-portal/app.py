@@ -7,9 +7,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# -------------------------
-# Helper: Redirect logged-in users
-# -------------------------
 def redirect_if_logged_in():
     if st.session_state.get(SESSION_KEYS["logged_in"]):
         user_row = st.session_state.get(SESSION_KEYS["user_row"], {})
@@ -22,14 +19,10 @@ def redirect_if_logged_in():
         elif role == "rp":
             st.switch_page("pages/4_RP.py")
         else:
-            # fallback: send to login
             st.switch_page("pages/1_Login.py")
 
 redirect_if_logged_in()
 
-# -------------------------
-# Landing Page UI
-# -------------------------
 st.markdown(
     """
     <div style="text-align:center; padding-top: 40px;">
@@ -43,7 +36,6 @@ st.markdown(
 )
 
 st.write("")
-st.write("")
 col1, col2, col3 = st.columns([1, 1, 1])
 
 with col2:
@@ -51,18 +43,14 @@ with col2:
         st.switch_page("pages/1_Login.py")
 
 st.write("")
-
-# Optional: Registration shortcut
 colA, colB, colC = st.columns([1, 1, 1])
+
 with colB:
     if st.button("📝 New User? Register", use_container_width=True):
         st.switch_page("pages/0_Register.py")
 
 st.write("")
 
-# -------------------------
-# Footer
-# -------------------------
 st.markdown(
     """
     <hr>
