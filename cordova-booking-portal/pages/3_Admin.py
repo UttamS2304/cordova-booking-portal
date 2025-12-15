@@ -15,7 +15,7 @@ if not st.session_state.get(SESSION_KEYS["logged_in"]):
     st.stop()
 
 user_row = st.session_state.get(SESSION_KEYS["user_row"], {})
-if user_row.get("role") != "admin":
+if (user_row.get("role") or "").lower() != "admin":
     st.error("You are not authorized to view this page.")
     st.stop()
 
@@ -34,8 +34,10 @@ tabs = st.tabs([
     "User Approvals",
     "Bookings",
     "Feedback & Reports",
-    "Teachers"
+    "Teachers",
+    "RP Linking"
 ])
+
 # ---------------------------
 # TAB 1: ADMIN HOME DASHBOARD
 # ---------------------------
@@ -44,18 +46,14 @@ with tabs[0]:
 
     today_str = str(date.today())
 
-    # --- Fetch today bookings ---
     today_res = (
         supabase.table("bookings")
-        .select("""
-            id, status, subject_id, rp_id, slot_id, session_type_id, school_id, date
-        """)
+        .select("id, status, subject_id, rp_id, slot_id, session_type_id, school_id, date")
         .eq("date", today_str)
         .execute()
     )
     today_rows = today_res.data or []
 
-    # --- Fetch lookups ---
     subjects = supabase.table("subjects").select("id,name").execute().data or []
     rps = supabase.table("resource_persons").select("id,display_name").execute().data or []
     slots = supabase.table("slots").select("id,start_time,end_time").execute().data or []
@@ -68,7 +66,6 @@ with tabs[0]:
     st_map = {t["id"]: t["name"] for t in session_types}
     school_map = {sc["id"]: sc["name"] for sc in schools}
 
-    # --- Summary cards ---
     total_today = len(today_rows)
     pending_today = sum(1 for b in today_rows if b.get("status") == "Pending")
     approved_today = sum(1 for b in today_rows if b.get("status") == "Approved")
@@ -84,7 +81,6 @@ with tabs[0]:
 
     st.divider()
 
-    # --- Subject-wise count ---
     st.markdown("### Subject-wise Booking Count (Today)")
     subj_counts = {}
     for b in today_rows:
@@ -92,9 +88,9 @@ with tabs[0]:
         name = subject_map.get(sid, "Unknown")
         subj_counts[name] = subj_counts.get(name, 0) + 1
 
-    df_subj = pd.DataFrame(
-        [{"Subject": k, "Bookings": v} for k, v in subj_counts.items()]
-    ).sort_values("Bookings", ascending=False)
+    df_subj = pd.DataFrame([{"Subject": k, "Bookings": v} for k, v in subj_counts.items()]).sort_values(
+        "Bookings", ascending=False
+    )
 
     if df_subj.empty:
         st.info("No bookings today.")
@@ -103,7 +99,6 @@ with tabs[0]:
 
     st.divider()
 
-    # --- RP-wise load today ---
     st.markdown("### RP-wise Load Summary (Today)")
     rp_counts = {}
     for b in today_rows:
@@ -111,9 +106,9 @@ with tabs[0]:
         name = rp_map.get(rid, "Unassigned")
         rp_counts[name] = rp_counts.get(name, 0) + 1
 
-    df_rp = pd.DataFrame(
-        [{"RP": k, "Classes Today": v} for k, v in rp_counts.items()]
-    ).sort_values("Classes Today", ascending=False)
+    df_rp = pd.DataFrame([{"RP": k, "Classes Today": v} for k, v in rp_counts.items()]).sort_values(
+        "Classes Today", ascending=False
+    )
 
     if df_rp.empty:
         st.info("No RP load yet.")
@@ -122,7 +117,6 @@ with tabs[0]:
 
     st.divider()
 
-    # --- Today's absent teachers ---
     st.markdown("### Today's Absent Teachers")
     abs_res = (
         supabase.table("rp_unavailability")
@@ -147,13 +141,10 @@ with tabs[0]:
 
     st.divider()
 
-    # --- Next 3 upcoming sessions (today onwards) ---
     st.markdown("### Next 3 Upcoming Sessions")
     upcoming_res = (
         supabase.table("bookings")
-        .select("""
-            id, date, status, subject_id, rp_id, slot_id, session_type_id, school_id, topic
-        """)
+        .select("id, date, status, subject_id, rp_id, slot_id, session_type_id, school_id, topic")
         .gte("date", today_str)
         .in_("status", ["Approved", "Scheduled", "Pending"])
         .order("date", desc=False)
@@ -179,7 +170,6 @@ with tabs[0]:
             })
         st.dataframe(pd.DataFrame(up_view), use_container_width=True)
 
-
 # ---------------------------
 # TAB 2: USER APPROVALS
 # ---------------------------
@@ -201,12 +191,7 @@ with tabs[1]:
         st.success("No pending users right now.")
     else:
         df = pd.DataFrame(pending_users)
-
-        df["role"] = df["role"].replace({
-            "salesperson": "Salesperson",
-            "rp": "Resource Person"
-        })
-
+        df["role"] = df["role"].replace({"salesperson": "Salesperson", "rp": "Resource Person"})
         st.dataframe(df, use_container_width=True)
 
         st.divider()
@@ -214,24 +199,19 @@ with tabs[1]:
 
         options = [f"{u['email']} ({u['role']})" for u in pending_users]
         selected = st.selectbox("Select a pending user", options, key="pending_user_select")
-
         selected_user = pending_users[options.index(selected)]
 
         colA, colB = st.columns(2)
 
         with colA:
             if st.button("✅ Approve User", use_container_width=True, key="approve_user_btn"):
-                supabase.table("users").update({
-                    "is_active": True
-                }).eq("id", selected_user["id"]).execute()
-
+                supabase.table("users").update({"is_active": True}).eq("id", selected_user["id"]).execute()
                 st.success(f"Approved: {selected_user['email']}")
                 st.rerun()
 
         with colB:
             if st.button("❌ Reject/Delete User", use_container_width=True, key="reject_user_btn"):
                 supabase.table("users").delete().eq("id", selected_user["id"]).execute()
-
                 st.warning(f"Deleted: {selected_user['email']}")
                 st.rerun()
 
@@ -241,7 +221,6 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("All Bookings")
 
-    # Lookup maps
     subjects = supabase.table("subjects").select("id,name").execute().data or []
     schools = supabase.table("schools").select("id,name,city").execute().data or []
     rps = supabase.table("resource_persons").select("id,display_name").execute().data or []
@@ -257,63 +236,30 @@ with tabs[2]:
     slot_map = {sl["id"]: f'{sl["start_time"]} - {sl["end_time"]}' for sl in slots}
     sp_map = {u["id"]: (u.get("name") or u.get("email")) for u in salespersons}
 
-    # Filters
     f1, f2, f3, f4, f5 = st.columns(5)
 
     with f1:
         filter_date = st.date_input("Filter Date", value=None, key="admin_booking_date")
 
     with f2:
-        filter_status = st.selectbox(
-            "Status",
-            ["All", "Pending", "Approved", "Rejected", "Cancelled", "Completed"],
-            key="admin_booking_status"
-        )
+        filter_status = st.selectbox("Status", ["All", "Pending", "Approved", "Rejected", "Cancelled", "Completed"],
+                                     key="admin_booking_status")
 
     with f3:
-        filter_subject = st.selectbox(
-            "Subject",
-            ["All"] + [s["name"] for s in subjects],
-            key="admin_booking_subject"
-        )
+        filter_subject = st.selectbox("Subject", ["All"] + [s["name"] for s in subjects], key="admin_booking_subject")
 
     with f4:
-        filter_rp = st.selectbox(
-            "Resource Person",
-            ["All"] + [r["display_name"] for r in rps],
-            key="admin_booking_rp"
-        )
+        filter_rp = st.selectbox("Resource Person", ["All"] + [r["display_name"] for r in rps], key="admin_booking_rp")
 
     with f5:
-        filter_salesperson = st.selectbox(
-            "Salesperson",
-            ["All"] + [sp_map[u["id"]] for u in salespersons],
-            key="admin_booking_salesperson"
-        )
+        filter_salesperson = st.selectbox("Salesperson", ["All"] + [sp_map[u["id"]] for u in salespersons],
+                                          key="admin_booking_salesperson")
 
-    # Fetch bookings
     q = supabase.table("bookings").select("""
-    id,
-    date,
-    status,
-    topic,
-    title_name,
-    notes,
-    city,
-    class_name,
-    grade_of_school,
-    curriculum,
-    tab_type,
-    school_id,
-    salesperson_id,
-    subject_id,
-    slot_id,
-    session_type_id,
-    rp_id,
-    rp_attendance_status,
-    rp_session_notes,
-    rp_marked_at
-""").order("date", desc=True)
+        id, date, status, topic, title_name, notes, city, class_name, grade_of_school, curriculum, tab_type,
+        school_id, salesperson_id, subject_id, slot_id, session_type_id, rp_id,
+        rp_attendance_status, rp_session_notes, rp_marked_at
+    """).order("date", desc=True)
 
     if filter_date:
         q = q.eq("date", str(filter_date))
@@ -329,16 +275,12 @@ with tabs[2]:
         sp_id = next(k for k, v in sp_map.items() if v == filter_salesperson)
         q = q.eq("salesperson_id", sp_id)
 
-    res = q.execute()
-    rows = res.data or []
-
+    rows = (q.execute().data or [])
     if not rows:
         st.info("No bookings found for selected filters.")
         st.stop()
 
     df = pd.DataFrame(rows)
-
-    # readable columns
     df["Subject"] = df["subject_id"].map(subject_map)
     df["School"] = df["school_id"].map(school_map)
     df["School City"] = df["school_id"].map(school_city_map)
@@ -348,98 +290,65 @@ with tabs[2]:
     df["Salesperson"] = df["salesperson_id"].map(sp_map)
 
     show_cols = [
-    "date", "Slot", "Subject", "Session Type",
-    "School", "School City", "class_name",
-    "topic", "title_name", "RP",
-    "status",
-    "rp_attendance_status",
-    "rp_session_notes",
-    "rp_marked_at",
-    "Salesperson", "tab_type", "id" 
+        "date", "Slot", "Subject", "Session Type", "School", "School City", "class_name",
+        "topic", "title_name", "RP", "status", "rp_attendance_status", "rp_session_notes",
+        "rp_marked_at", "Salesperson", "tab_type", "id"
     ]
-
-    show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(df[show_cols], use_container_width=True)
 
     st.divider()
-
-    # Manage booking
     st.subheader("Approve / Reject / Cancel / Edit")
 
     booking_options = [
         f'{r["date"]} | {slot_map.get(r["slot_id"])} | {subject_map.get(r["subject_id"])} | {school_map.get(r["school_id"])} | {r["id"][:6]}'
         for r in rows
     ]
-
     selected_label = st.selectbox("Select a booking", booking_options, key="admin_booking_select")
-    selected_idx = booking_options.index(selected_label)
-    selected_booking = rows[selected_idx]
+    selected_booking = rows[booking_options.index(selected_label)]
 
     st.markdown("### Booking Details")
     st.json(selected_booking)
 
     action_col1, action_col2, action_col3, action_col4 = st.columns(4)
 
-    # Approve
     with action_col1:
         if st.button("✅ Approve Booking", use_container_width=True, key="admin_approve_btn"):
             if selected_booking["status"] != "Pending":
                 st.warning("Only Pending bookings can be approved.")
             else:
-                supabase.table("bookings").update({
-                    "status": "Approved"
-                }).eq("id", selected_booking["id"]).execute()
+                supabase.table("bookings").update({"status": "Approved"}).eq("id", selected_booking["id"]).execute()
                 st.success("Booking approved!")
                 st.rerun()
 
-    # Reject
     with action_col2:
         reject_reason = st.text_input("Reject reason (optional)", key="admin_reject_reason")
         if st.button("❌ Reject Booking", use_container_width=True, key="admin_reject_btn"):
             if selected_booking["status"] != "Pending":
                 st.warning("Only Pending bookings can be rejected.")
             else:
-                supabase.table("bookings").update({
-                    "status": "Rejected",
-                    "admin_reason": reject_reason
-                }).eq("id", selected_booking["id"]).execute()
+                supabase.table("bookings").update({"status": "Rejected", "admin_reason": reject_reason}) \
+                    .eq("id", selected_booking["id"]).execute()
                 st.success("Booking rejected!")
                 st.rerun()
 
-    # Cancel
     with action_col3:
         if st.button("Cancel Booking", use_container_width=True, key="admin_cancel_btn"):
             if selected_booking["status"] not in ["Approved", "Pending"]:
                 st.warning("Only Pending/Approved bookings can be cancelled.")
             else:
-                supabase.table("bookings").update({
-                    "status": "Cancelled"
-                }).eq("id", selected_booking["id"]).execute()
+                supabase.table("bookings").update({"status": "Cancelled"}).eq("id", selected_booking["id"]).execute()
                 st.success("Booking cancelled.")
                 st.rerun()
 
-    # Edit
     with action_col4:
         st.write("Edit Slot/Date/RP")
 
-        new_date = st.date_input(
-            "New Date",
-            value=date.fromisoformat(selected_booking["date"]),
-            key="admin_edit_date"
-        )
+        new_date = st.date_input("New Date", value=date.fromisoformat(selected_booking["date"]), key="admin_edit_date")
 
-        new_slot_label = st.selectbox(
-            "New Slot",
-            list(slot_map.values()),
-            key="admin_edit_slot"
-        )
+        new_slot_label = st.selectbox("New Slot", list(slot_map.values()), key="admin_edit_slot")
         new_slot_id = next(k for k, v in slot_map.items() if v == new_slot_label)
 
-        new_rp_label = st.selectbox(
-            "New RP",
-            list(rp_map.values()),
-            key="admin_edit_rp"
-        )
+        new_rp_label = st.selectbox("New RP", list(rp_map.values()), key="admin_edit_rp")
         new_rp_id = next(k for k, v in rp_map.items() if v == new_rp_label)
 
         if st.button("✏️ Save Changes", use_container_width=True, key="admin_save_edit_btn"):
@@ -451,15 +360,13 @@ with tabs[2]:
 
             st.success("Booking updated.")
             st.rerun()
+
 # ---------------------------
 # TAB 4: FEEDBACK & REPORTS
 # ---------------------------
 with tabs[3]:
     st.subheader("Salesperson Feedback (Completed Sessions)")
 
-    # -------------------------
-    # Lookup tables
-    # -------------------------
     subjects = supabase.table("subjects").select("id,name").execute().data or []
     schools = supabase.table("schools").select("id,name,city").execute().data or []
     rps = supabase.table("resource_persons").select("id,display_name").execute().data or []
@@ -474,45 +381,19 @@ with tabs[3]:
     slot_map = {sl["id"]: f'{sl["start_time"]} - {sl["end_time"]}' for sl in slots}
     sp_map = {u["id"]: (u.get("name") or u.get("email")) for u in salespersons}
 
-    # -------------------------
-    # Filters
-    # -------------------------
     f1, f2, f3, f4 = st.columns(4)
-
     with f1:
-        filter_school = st.selectbox(
-            "School",
-            ["All"] + [sc["name"] for sc in schools],
-            key="fb_filter_school"
-        )
-
+        filter_school = st.selectbox("School", ["All"] + [sc["name"] for sc in schools], key="fb_filter_school")
     with f2:
-        filter_rp = st.selectbox(
-            "RP",
-            ["All"] + [rp["display_name"] for rp in rps],
-            key="fb_filter_rp"
-        )
-
+        filter_rp = st.selectbox("RP", ["All"] + [rp["display_name"] for rp in rps], key="fb_filter_rp")
     with f3:
-        filter_subject = st.selectbox(
-            "Subject",
-            ["All"] + [s["name"] for s in subjects],
-            key="fb_filter_subject"
-        )
-
+        filter_subject = st.selectbox("Subject", ["All"] + [s["name"] for s in subjects], key="fb_filter_subject")
     with f4:
-        filter_type = st.selectbox(
-            "Session Type",
-            ["All"] + [t["name"] for t in session_types],
-            key="fb_filter_type"
-        )
+        filter_type = st.selectbox("Session Type", ["All"] + [t["name"] for t in session_types], key="fb_filter_type")
 
     st.divider()
 
-    # -------------------------
-    # Fetch feedback (with booking join)
-    # -------------------------
-    fb_res = (
+    fb_rows = (
         supabase.table("feedback")
         .select("""
             id, created_at, booking_id, salesperson_id,
@@ -525,22 +406,16 @@ with tabs[3]:
         """)
         .order("created_at", desc=True)
         .execute()
-    )
-
-    fb_rows = fb_res.data or []
+    ).data or []
 
     if not fb_rows:
         st.info("No feedback submitted yet.")
         st.stop()
 
-    # -------------------------
-    # Convert to flat rows
-    # -------------------------
     flat = []
     for f in fb_rows:
         b = f.get("bookings") or {}
-
-        row = {
+        flat.append({
             "Date": b.get("date"),
             "Slot": slot_map.get(b.get("slot_id")),
             "Subject": subject_map.get(b.get("subject_id")),
@@ -557,23 +432,16 @@ with tabs[3]:
             "Notes": f.get("notes"),
             "Submitted At": f.get("created_at"),
             "Booking ID": f.get("booking_id"),
-        }
-        flat.append(row)
+        })
 
     df = pd.DataFrame(flat)
 
-    # -------------------------
-    # Apply filters locally
-    # -------------------------
     if filter_school != "All":
         df = df[df["School"] == filter_school]
-
     if filter_rp != "All":
         df = df[df["RP"] == filter_rp]
-
     if filter_subject != "All":
         df = df[df["Subject"] == filter_subject]
-
     if filter_type != "All":
         df = df[df["Session Type"] == filter_type]
 
@@ -582,21 +450,19 @@ with tabs[3]:
         st.stop()
 
     st.dataframe(df, use_container_width=True)
-
-    # Optional export button (CSV)
     st.download_button(
         "⬇️ Download Feedback CSV",
         data=df.to_csv(index=False),
         file_name="cordova_feedback.csv",
         mime="text/csv"
     )
+
 # ---------------------------
 # TAB 5: TEACHERS / ABSENCE
 # ---------------------------
 with tabs[4]:
     st.subheader("Teacher (RP) Absence Management")
 
-    # Lookups
     rps = supabase.table("resource_persons").select("id, display_name, is_active").order("display_name").execute().data or []
     slots = supabase.table("slots").select("id, start_time, end_time, is_active").order("start_time").execute().data or []
     session_types = supabase.table("session_types").select("id, name").order("name").execute().data or []
@@ -608,19 +474,12 @@ with tabs[4]:
     st.markdown("### Mark RP Absent")
 
     c1, c2, c3 = st.columns(3)
-
     with c1:
         rp_name = st.selectbox("Select RP*", ["Select RP"] + list(rp_map.keys()), key="abs_rp")
-
     with c2:
         abs_date = st.date_input("Absent Date*", value=None, key="abs_date")
-
     with c3:
-        abs_type = st.selectbox(
-            "Absence Type*",
-            ["Full Day", "Specific Slot", "Specific Session Type"],
-            key="abs_type"
-        )
+        abs_type = st.selectbox("Absence Type*", ["Full Day", "Specific Slot", "Specific Session Type"], key="abs_type")
 
     selected_slot_id = None
     selected_st_id = None
@@ -656,7 +515,6 @@ with tabs[4]:
                 "reason": reason
             }
 
-            # prevent duplicate exact records
             existing = (
                 supabase.table("rp_unavailability")
                 .select("id")
@@ -678,19 +536,17 @@ with tabs[4]:
     st.divider()
     st.markdown("### Current Absences")
 
-    abs_res = (
+    abs_rows = (
         supabase.table("rp_unavailability")
         .select("id, date, is_full_day, slot_id, session_type_id, reason, rp_id, created_at")
         .order("date", desc=True)
         .execute()
-    )
-    abs_rows = abs_res.data or []
+    ).data or []
 
     if not abs_rows:
         st.info("No absences marked yet.")
         st.stop()
 
-    # Build readable view
     rp_id_to_name = {r["id"]: r["display_name"] for r in rps}
     slot_id_to_label = {s["id"]: f'{s["start_time"]} - {s["end_time"]}' for s in slots}
     st_id_to_name = {t["id"]: t["name"] for t in session_types}
@@ -719,10 +575,50 @@ with tabs[4]:
     ]
 
     selected_abs_label = st.selectbox("Select absence to remove", absence_options, key="abs_remove_select")
-    selected_abs_idx = absence_options.index(selected_abs_label)
-    selected_abs_id = view[selected_abs_idx]["Absence ID"]
+    selected_abs_id = view[absence_options.index(selected_abs_label)]["Absence ID"]
 
     if st.button("🗑️ Delete Absence", use_container_width=True, key="abs_remove_btn"):
         supabase.table("rp_unavailability").delete().eq("id", selected_abs_id).execute()
         st.success("Absence removed. RP is available again.")
+        st.rerun()
+
+# ---------------------------
+# TAB 6: RP LINKING
+# ---------------------------
+with tabs[5]:
+    st.subheader("Link RP Login Account to RP Profile")
+
+    st.info(
+        "If an RP registered (users table) but cannot open RP dashboard, link them here.\n"
+        "This sets: resource_persons.user_id = users.id for matching email."
+    )
+
+    rp_email = st.text_input("RP Email (must match resource_persons.email)", key="link_rp_email").strip().lower()
+
+    if st.button("🔗 Link RP", use_container_width=True, key="link_rp_btn"):
+        if not rp_email:
+            st.error("Please enter RP email.")
+            st.stop()
+
+        ures = supabase.table("users").select("id,email,role").eq("email", rp_email).limit(1).execute()
+        urows = ures.data or []
+        if not urows:
+            st.error("No user found in users table with this email.")
+            st.stop()
+
+        user = urows[0]
+        if (user.get("role") or "").lower() != "rp":
+            st.error(f"This email is registered as role '{user.get('role')}', not 'rp'.")
+            st.stop()
+
+        rpres = supabase.table("resource_persons").select("id,email,user_id,display_name").eq("email", rp_email).limit(1).execute()
+        rprows = rpres.data or []
+        if not rprows:
+            st.error("No RP found in resource_persons table with this email.")
+            st.stop()
+
+        rp = rprows[0]
+
+        supabase.table("resource_persons").update({"user_id": user["id"]}).eq("id", rp["id"]).execute()
+        st.success(f"Linked successfully: {rp.get('display_name') or rp_email}")
         st.rerun()
