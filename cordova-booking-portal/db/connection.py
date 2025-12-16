@@ -10,8 +10,8 @@ def get_supabase() -> Client:
 @st.cache_resource
 def get_supabase_admin() -> Client:
     """
-    Uses service role key to bypass RLS.
-    Must add SUPABASE_SERVICE_ROLE_KEY in Streamlit secrets.
+    Uses Service Role Key to bypass RLS for admin-only operations.
+    Add SUPABASE_SERVICE_ROLE_KEY in Streamlit secrets.
     """
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
