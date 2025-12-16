@@ -7,56 +7,39 @@ st.set_page_config(
     layout="wide"
 )
 
-def redirect_if_logged_in():
-    if st.session_state.get(SESSION_KEYS["logged_in"]):
-        user_row = st.session_state.get(SESSION_KEYS["user_row"], {})
-        role = (user_row.get("role") or "").lower()
+# -------------------------
+# Define Pages (controlled sidebar)
+# -------------------------
+login_page = st.Page("pages/1_Login.py", title="Login", icon="🔐")
 
-        if role == "salesperson":
-            st.switch_page("pages/2_Salesperson.py")
-        elif role == "admin":
-            st.switch_page("pages/3_Admin.py")
-        elif role == "rp":
-            st.switch_page("pages/4_RP.py")
-        else:
-            st.switch_page("pages/1_Login.py")
+# Optional: keep registration visible only before login
+register_page = st.Page("pages/0_Register.py", title="Register", icon="📝")
 
-redirect_if_logged_in()
+salesperson_page = st.Page("pages/2_Salesperson.py", title="Salesperson", icon="🧑‍💼")
+admin_page = st.Page("pages/3_Admin.py", title="Admin", icon="🛠️")
+rp_page = st.Page("pages/4_RP.py", title="RP", icon="👩‍🏫")
 
-st.markdown(
-    """
-    <div style="text-align:center; padding-top: 40px;">
-        <h1 style="font-size: 48px;">Cordova Publications Online Booking Portal</h1>
-        <p style="font-size: 18px; color: #cfcfcf; margin-top: 8px;">
-            Welcome! Book Live Classes, Product Trainings and AVRD sessions quickly and track them in one place.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+# -------------------------
+# Role-based Navigation
+# -------------------------
+def get_nav_config():
+    # Not logged in -> only Login (+ Register if you want)
+    if not st.session_state.get(SESSION_KEYS["logged_in"]):
+        return {"": [login_page, register_page]}  # remove register_page if you don't want it shown
 
-st.write("")
-col1, col2, col3 = st.columns([1, 1, 1])
+    # Logged in -> show ONLY their role page
+    user_row = st.session_state.get(SESSION_KEYS["user_row"], {}) or {}
+    role = (user_row.get("role") or "").lower()
 
-with col2:
-    if st.button("🔐 Login to Continue", use_container_width=True):
-        st.switch_page("pages/1_Login.py")
+    if role == "salesperson":
+        return {"": [salesperson_page]}
+    elif role == "admin":
+        return {"": [admin_page]}
+    elif role == "rp":
+        return {"": [rp_page]}
+    else:
+        # Unknown role -> send to login
+        return {"": [login_page]}
 
-st.write("")
-colA, colB, colC = st.columns([1, 1, 1])
-
-with colB:
-    if st.button("📝 New User? Register", use_container_width=True):
-        st.switch_page("pages/0_Register.py")
-
-st.write("")
-
-st.markdown(
-    """
-    <hr>
-    <div style="text-align:center; font-size: 13px; color: #888;">
-        Made by @Uttam for Cordova Publications 2025
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+nav = st.navigation(get_nav_config())
+nav.run()
