@@ -1,4 +1,3 @@
-# pages/2_Salesperson.py
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
@@ -9,9 +8,7 @@ from db.allocation import assign_rp, available_slots_summary
 
 st.title("Salesperson Dashboard")
 
-# -------------------------
 # Access Control
-# -------------------------
 if not st.session_state.get(SESSION_KEYS["logged_in"]):
     st.warning("Please login first.")
     st.stop()
@@ -24,9 +21,6 @@ if (user_row.get("role") or "").lower() != "salesperson":
 salesperson_id = user_row["id"]
 supabase = get_supabase()
 
-# -------------------------
-# Sidebar
-# -------------------------
 with st.sidebar:
     st.subheader("Salesperson Controls")
     st.write(f"Logged in as: **{user_row.get('email')}**")
@@ -36,20 +30,23 @@ with st.sidebar:
 
 tabs = st.tabs(["Home", "My Bookings", "New Booking", "Feedback"])
 
-# -------------------------
-# TAB 1: HOME
-# -------------------------
+# TAB 1
 with tabs[0]:
     st.subheader("Summary")
-
     today_str = str(date.today())
 
-    res = (
-        supabase.table("bookings")
-        .select("id, status, date, session_type_id")
-        .eq("salesperson_id", salesperson_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("bookings")
+            .select("id, status, date, session_type_id")
+            .eq("salesperson_id", salesperson_id)
+            .execute()
+        )
+    except Exception as e:
+        st.error("Bookings query failed. This is usually a DB column mismatch.")
+        st.code(str(e))
+        st.stop()
+
     all_bookings = res.data or []
 
     def count_where(fn):
@@ -70,7 +67,6 @@ with tabs[0]:
 
     st.divider()
     st.subheader("Notifications (basic)")
-
     last10 = sorted(all_bookings, key=lambda x: x.get("date", ""), reverse=True)[:10]
     if not last10:
         st.info("No notifications yet.")
@@ -413,3 +409,4 @@ with tabs[3]:
 
         st.success("Feedback submitted successfully ✅")
         st.rerun()
+
