@@ -6,3 +6,9 @@ def get_supabase() -> Client:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_ANON_KEY"]
     return create_client(url, key)
+
+@st.cache_resource
+def get_supabase_admin() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]  # add in secrets
+    return create_client(url, key)
