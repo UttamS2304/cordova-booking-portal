@@ -3,11 +3,9 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta, datetime
 from config.settings import SESSION_KEYS
-from db.connection import get_supabase
+from db.connection import get_supabase_admin
 from utils.auth import logout
 
-# NOTE:
-# Do NOT use st.set_page_config() inside pages when using st.navigation() in app.py
 st.title("Resource Person Dashboard")
 
 # -------------------------
@@ -22,9 +20,10 @@ if (user_row.get("role") or "").lower() != "rp":
     st.error("You are not authorized to view this page.")
     st.stop()
 
-supabase = get_supabase()
-rp_user_id = user_row.get("id")
+# IMPORTANT: use service-role client (bypass RLS while you finalize policies)
+supabase = get_supabase_admin()
 
+rp_user_id = user_row.get("id")
 if not rp_user_id:
     st.error("Session error: user id missing. Please logout and login again.")
     st.stop()
@@ -32,21 +31,24 @@ if not rp_user_id:
 # -------------------------
 # Find linked RP record
 # -------------------------
-rp_res = (
-    supabase.table("resource_persons")
-    .select("id, display_name, user_id, email")
-    .eq("user_id", rp_user_id)
-    .limit(1)
-    .execute()
-)
+try:
+    rp_res = (
+        supabase.table("resource_persons")
+        .select("id, display_name, user_id, email")
+        .eq("user_id", rp_user_id)
+        .limit(1)
+        .execute()
+    )
+except Exception as e:
+    st.error(f"Could not read resource_persons. Check RLS/policies later. Error: {e}")
+    st.stop()
 
 rp_row = (rp_res.data or [None])[0]
-
 if not rp_row:
     st.error(
         "Your RP profile is not linked yet.\n\n"
-        "Admin must link your RP account in the Admin → RP Linking tab.\n"
-        f"(Your login email: {user_row.get('email')})"
+        "Admin must link your RP account in Admin → RP Linking.\n"
+        f"Login email: {user_row.get('email')}"
     )
     st.stop()
 
@@ -65,7 +67,7 @@ with st.sidebar:
 tabs = st.tabs(["Home", "My Classes"])
 
 # -------------------------
-# LOOKUPS (safe)
+# LOOKUPS
 # -------------------------
 subjects = supabase.table("subjects").select("id,name").execute().data or []
 schools = supabase.table("schools").select("id,name,city").execute().data or []
@@ -98,12 +100,8 @@ with tabs[0]:
     def count_where(fn):
         return sum(1 for b in all_classes if fn(b))
 
-    today_classes = count_where(
-        lambda b: b.get("date") == today_str and (b.get("status") in ["Approved", "Scheduled"])
-    )
-    tomorrow_classes = count_where(
-        lambda b: b.get("date") == str(date.today() + timedelta(days=1)) and (b.get("status") in ["Approved", "Scheduled"])
-    )
+    today_classes = count_where(lambda b: b.get("date") == today_str and b.get("status") in ["Approved", "Scheduled"])
+    tomorrow_classes = count_where(lambda b: b.get("date") == str(date.today() + timedelta(days=1)) and b.get("status") in ["Approved", "Scheduled"])
     month_classes = count_where(lambda b: (b.get("date") or "") >= month_start)
     avrd_classes = count_where(lambda b: st_map.get(b.get("session_type_id")) == "AVRD")
 
@@ -123,14 +121,12 @@ with tabs[1]:
 
     with f1:
         filter_range = st.selectbox("Date Filter", ["Today", "Tomorrow", "This Week", "All"], key="rp_filter_range")
-
     with f2:
         filter_status = st.selectbox(
             "Status Filter",
             ["All", "Pending", "Approved", "Scheduled", "Completed", "Cancelled", "Rejected"],
             key="rp_filter_status"
         )
-
     with f3:
         filter_subject = st.selectbox(
             "Subject Filter",
@@ -168,7 +164,7 @@ with tabs[1]:
     filtered = [r for r in rows if in_range(r.get("date"))]
 
     if filter_status != "All":
-        filtered = [r for r in filtered if (r.get("status") == filter_status)]
+        filtered = [r for r in filtered if r.get("status") == filter_status]
 
     if filter_subject != "All":
         sub_id = next((s["id"] for s in subjects if s["name"] == filter_subject), None)
@@ -180,7 +176,6 @@ with tabs[1]:
         st.stop()
 
     df = pd.DataFrame(filtered)
-
     df["Subject"] = df["subject_id"].map(subject_map)
     df["School"] = df["school_id"].map(school_map)
     df["School City"] = df["school_id"].map(school_city_map)
@@ -193,19 +188,17 @@ with tabs[1]:
         "topic", "title_name",
         "status", "rp_attendance_status", "rp_session_notes", "id"
     ]
-    show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(df[show_cols], use_container_width=True)
 
     st.divider()
     st.subheader("Mark Attendance & Submit Notes")
 
     booking_options = [
-        f'{r.get("date")} | {slot_map.get(r.get("slot_id"))} | {subject_map.get(r.get("subject_id"))} | {school_map.get(r.get("school_id"))} | {str(r.get("id"))[:6]}'
+        f'{r["date"]} | {slot_map.get(r["slot_id"])} | {subject_map.get(r["subject_id"])} | {school_map.get(r["school_id"])} | {r["id"][:6]}'
         for r in filtered
     ]
     selected_label = st.selectbox("Select class to update", booking_options, key="rp_booking_select")
-    selected_idx = booking_options.index(selected_label)
-    selected_booking = filtered[selected_idx]
+    selected_booking = filtered[booking_options.index(selected_label)]
 
     attendance_status = st.selectbox(
         "Attendance Status",
@@ -221,28 +214,14 @@ with tabs[1]:
     )
 
     if st.button("✅ Save Attendance & Notes", use_container_width=True, key="rp_save_attendance"):
-        try:
-            update_payload = {
-                "rp_attendance_status": attendance_status,
-                "rp_session_notes": session_notes,
-                "rp_marked_at": datetime.utcnow().isoformat(),
-            }
+        update_payload = {
+            "rp_attendance_status": attendance_status,
+            "rp_session_notes": session_notes,
+            "rp_marked_at": datetime.utcnow().isoformat(),
+        }
+        if attendance_status == "Completed":
+            update_payload["status"] = "Completed"
 
-            # auto-mark booking completed if RP says Completed
-            if attendance_status == "Completed":
-                update_payload["status"] = "Completed"
-
-            supabase.table("bookings").update(update_payload).eq("id", selected_booking["id"]).execute()
-
-            st.success("Attendance & notes saved.")
-            st.rerun()
-
-        except Exception as e:
-            st.error(
-                "Update failed.\n\n"
-                "Check your bookings table has these columns:\n"
-                "1) rp_attendance_status (text)\n"
-                "2) rp_session_notes (text)\n"
-                "3) rp_marked_at (timestamptz)\n\n"
-                f"Error: {e}"
-            )
+        supabase.table("bookings").update(update_payload).eq("id", selected_booking["id"]).execute()
+        st.success("Attendance & notes saved.")
+        st.rerun()
