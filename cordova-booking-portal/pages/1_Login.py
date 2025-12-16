@@ -2,28 +2,49 @@
 import streamlit as st
 from config.settings import SESSION_KEYS
 from utils.auth import login_public_user, set_logged_in, logout
-from db.connection import get_supabase, get_supabase_admin
+from db.connection import get_supabase_admin
 
 st.title("Cordova Publications Online Booking Portal")
 st.subheader("Login")
 
-supabase = get_supabase()
-supabase_admin = get_supabase_admin()  # IMPORTANT: bypass RLS for admin lookup
+supabase_admin = get_supabase_admin()  # service role (RLS-safe)
 
-# If already logged in
+# -------------------------------------------------
+# Already logged in
+# -------------------------------------------------
 if st.session_state.get(SESSION_KEYS["logged_in"]):
     user = st.session_state.get(SESSION_KEYS["user_row"]) or {}
     st.success(f"Logged in as {user.get('email')} ({user.get('role')})")
+
     if st.button("Logout", use_container_width=True):
         logout()
         st.rerun()
+
     st.stop()
 
-st.page_link("pages/0_Register.py", label="New user? Register here", icon="📝")
+# -------------------------------------------------
+# Register redirect (navigation-safe)
+# -------------------------------------------------
+if st.button("📝 New user? Register here", use_container_width=True):
+    st.switch_page("pages/0_Register.py")
+
 st.divider()
 
-role_label = st.selectbox("Login as", ["Salesperson", "Resource Person (RP)", "Admin"])
-role = "salesperson" if role_label == "Salesperson" else ("rp" if role_label.startswith("Resource") else "admin")
+# -------------------------------------------------
+# Login form
+# -------------------------------------------------
+role_label = st.selectbox(
+    "Login as",
+    ["Salesperson", "Resource Person (RP)", "Admin"]
+)
+
+role = (
+    "salesperson"
+    if role_label == "Salesperson"
+    else "rp"
+    if role_label.startswith("Resource")
+    else "admin"
+)
 
 email = st.text_input("Email").strip().lower()
 password = st.text_input("Password", type="password")
@@ -33,14 +54,14 @@ if st.button("Login", use_container_width=True):
         st.error("Enter email and password.")
         st.stop()
 
-    # -------------------------
-    # ADMIN LOGIN (RLS-SAFE)
-    # -------------------------
+    # -------------------------------------------------
+    # ADMIN LOGIN (plain-text password)
+    # -------------------------------------------------
     if role == "admin":
         res = (
             supabase_admin.table("users")
             .select("*")
-            .ilike("email", email.strip())
+            .ilike("email", email)
             .eq("role", "admin")
             .limit(1)
             .execute()
@@ -48,7 +69,7 @@ if st.button("Login", use_container_width=True):
 
         rows = res.data or []
         if not rows:
-            st.error("Admin not found in users table.")
+            st.error("Admin not found.")
             st.stop()
 
         admin_row = rows[0]
@@ -57,7 +78,7 @@ if st.button("Login", use_container_width=True):
             st.error("Admin account is inactive.")
             st.stop()
 
-        # TEMP: your current admin password is stored plain-text in password_hash
+        # Plain-text admin password (as per your current DB)
         if str(admin_row.get("password_hash") or "") != str(password):
             st.error("Incorrect password.")
             st.stop()
@@ -66,9 +87,9 @@ if st.button("Login", use_container_width=True):
         st.success("Admin login successful!")
         st.rerun()
 
-    # -------------------------
-    # SALESPERSON / RP LOGIN
-    # -------------------------
+    # -------------------------------------------------
+    # SALESPERSON / RP LOGIN (hashed)
+    # -------------------------------------------------
     else:
         try:
             user_row = login_public_user(email, password)
