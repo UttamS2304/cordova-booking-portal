@@ -1,9 +1,7 @@
 # pages/0_Register.py
 import streamlit as st
-from config.settings import ROLES
 from utils.auth import register_public_user
 
-st.set_page_config(page_title="Register | Cordova Booking Portal", layout="centered")
 st.title("Cordova Publications Online Booking Portal")
 st.subheader("Register")
 
@@ -35,7 +33,7 @@ if submitted:
         st.stop()
 
     try:
-        user_row = register_public_user(
+        register_public_user(
             name=name,
             email=email,
             phone=phone,
