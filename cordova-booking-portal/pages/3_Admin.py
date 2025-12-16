@@ -6,7 +6,9 @@ from config.settings import SESSION_KEYS
 from db.connection import get_supabase
 from utils.auth import logout
 
-st.set_page_config(page_title="Admin | Cordova Booking Portal", layout="wide")
+# NOTE:
+# Do NOT use st.set_page_config() here because app.py already sets it (st.navigation app)
+
 st.title("Admin Dashboard")
 
 # --- Access control: only admin can open ---
