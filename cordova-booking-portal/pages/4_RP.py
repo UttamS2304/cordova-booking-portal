@@ -6,7 +6,8 @@ from config.settings import SESSION_KEYS
 from db.connection import get_supabase
 from utils.auth import logout
 
-st.set_page_config(page_title="RP | Cordova Booking Portal", layout="wide")
+# NOTE:
+# Do NOT use st.set_page_config() inside pages when using st.navigation() in app.py
 st.title("Resource Person Dashboard")
 
 # -------------------------
@@ -16,28 +17,37 @@ if not st.session_state.get(SESSION_KEYS["logged_in"]):
     st.warning("Please login first.")
     st.stop()
 
-user_row = st.session_state.get(SESSION_KEYS["user_row"], {})
-if user_row.get("role") != "rp":
+user_row = st.session_state.get(SESSION_KEYS["user_row"], {}) or {}
+if (user_row.get("role") or "").lower() != "rp":
     st.error("You are not authorized to view this page.")
     st.stop()
 
 supabase = get_supabase()
-rp_user_id = user_row["id"]
+rp_user_id = user_row.get("id")
+
+if not rp_user_id:
+    st.error("Session error: user id missing. Please logout and login again.")
+    st.stop()
 
 # -------------------------
 # Find linked RP record
 # -------------------------
 rp_res = (
     supabase.table("resource_persons")
-    .select("id, display_name, user_id")
+    .select("id, display_name, user_id, email")
     .eq("user_id", rp_user_id)
     .limit(1)
     .execute()
 )
+
 rp_row = (rp_res.data or [None])[0]
 
 if not rp_row:
-    st.error("Your RP profile is not linked yet. Please contact Admin.")
+    st.error(
+        "Your RP profile is not linked yet.\n\n"
+        "Admin must link your RP account in the Admin → RP Linking tab.\n"
+        f"(Your login email: {user_row.get('email')})"
+    )
     st.stop()
 
 rp_id = rp_row["id"]
@@ -47,15 +57,15 @@ rp_id = rp_row["id"]
 # -------------------------
 with st.sidebar:
     st.subheader("RP Controls")
-    st.write(f"Logged in as: **{rp_row.get('display_name')}**")
-    if st.button("Logout"):
+    st.write(f"Logged in as: **{rp_row.get('display_name') or rp_row.get('email')}**")
+    if st.button("Logout", use_container_width=True):
         logout()
         st.rerun()
 
 tabs = st.tabs(["Home", "My Classes"])
 
 # -------------------------
-# LOOKUPS
+# LOOKUPS (safe)
 # -------------------------
 subjects = supabase.table("subjects").select("id,name").execute().data or []
 schools = supabase.table("schools").select("id,name,city").execute().data or []
@@ -88,9 +98,13 @@ with tabs[0]:
     def count_where(fn):
         return sum(1 for b in all_classes if fn(b))
 
-    today_classes = count_where(lambda b: b.get("date") == today_str and b.get("status") in ["Approved", "Scheduled"])
-    tomorrow_classes = count_where(lambda b: b.get("date") == str(date.today() + timedelta(days=1)) and b.get("status") in ["Approved", "Scheduled"])
-    month_classes = count_where(lambda b: b.get("date") >= month_start)
+    today_classes = count_where(
+        lambda b: b.get("date") == today_str and (b.get("status") in ["Approved", "Scheduled"])
+    )
+    tomorrow_classes = count_where(
+        lambda b: b.get("date") == str(date.today() + timedelta(days=1)) and (b.get("status") in ["Approved", "Scheduled"])
+    )
+    month_classes = count_where(lambda b: (b.get("date") or "") >= month_start)
     avrd_classes = count_where(lambda b: st_map.get(b.get("session_type_id")) == "AVRD")
 
     c1, c2, c3, c4 = st.columns(4)
@@ -154,11 +168,12 @@ with tabs[1]:
     filtered = [r for r in rows if in_range(r.get("date"))]
 
     if filter_status != "All":
-        filtered = [r for r in filtered if r.get("status") == filter_status]
+        filtered = [r for r in filtered if (r.get("status") == filter_status)]
 
     if filter_subject != "All":
-        sub_id = next(s["id"] for s in subjects if s["name"] == filter_subject)
-        filtered = [r for r in filtered if r.get("subject_id") == sub_id]
+        sub_id = next((s["id"] for s in subjects if s["name"] == filter_subject), None)
+        if sub_id:
+            filtered = [r for r in filtered if r.get("subject_id") == sub_id]
 
     if not filtered:
         st.info("No classes found for selected filters.")
@@ -184,17 +199,13 @@ with tabs[1]:
     st.divider()
     st.subheader("Mark Attendance & Submit Notes")
 
-    # Select booking to update
     booking_options = [
-        f'{r["date"]} | {slot_map.get(r["slot_id"])} | {subject_map.get(r["subject_id"])} | {school_map.get(r["school_id"])} | {r["id"][:6]}'
+        f'{r.get("date")} | {slot_map.get(r.get("slot_id"))} | {subject_map.get(r.get("subject_id"))} | {school_map.get(r.get("school_id"))} | {str(r.get("id"))[:6]}'
         for r in filtered
     ]
     selected_label = st.selectbox("Select class to update", booking_options, key="rp_booking_select")
     selected_idx = booking_options.index(selected_label)
     selected_booking = filtered[selected_idx]
-
-    st.markdown("### Selected Class Details")
-    st.json(selected_booking)
 
     attendance_status = st.selectbox(
         "Attendance Status",
@@ -211,21 +222,25 @@ with tabs[1]:
 
     if st.button("✅ Save Attendance & Notes", use_container_width=True, key="rp_save_attendance"):
         try:
-            supabase.table("bookings").update({
+            update_payload = {
                 "rp_attendance_status": attendance_status,
                 "rp_session_notes": session_notes,
                 "rp_marked_at": datetime.utcnow().isoformat(),
-                # auto-mark booking completed if RP says Completed
-                "status": "Completed" if attendance_status == "Completed" else selected_booking.get("status")
-            }).eq("id", selected_booking["id"]).execute()
+            }
+
+            # auto-mark booking completed if RP says Completed
+            if attendance_status == "Completed":
+                update_payload["status"] = "Completed"
+
+            supabase.table("bookings").update(update_payload).eq("id", selected_booking["id"]).execute()
 
             st.success("Attendance & notes saved.")
             st.rerun()
 
         except Exception as e:
             st.error(
-                "Update failed. Most likely your bookings table is missing columns.\n\n"
-                "Please add these 3 columns in Supabase → bookings table:\n"
+                "Update failed.\n\n"
+                "Check your bookings table has these columns:\n"
                 "1) rp_attendance_status (text)\n"
                 "2) rp_session_notes (text)\n"
                 "3) rp_marked_at (timestamptz)\n\n"
