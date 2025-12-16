@@ -31,7 +31,6 @@ if st.button("Login", use_container_width=True):
         st.error("Enter email and password.")
         st.stop()
 
-    # ADMIN LOGIN
     if role == "admin":
         res = (
             supabase_admin.table("users")
@@ -41,7 +40,6 @@ if st.button("Login", use_container_width=True):
             .limit(1)
             .execute()
         )
-
         rows = res.data or []
         if not rows:
             st.error("Admin not found in users table.")
@@ -53,7 +51,7 @@ if st.button("Login", use_container_width=True):
             st.error("Admin account is inactive.")
             st.stop()
 
-        # TEMP: admin password stored plain in password_hash
+        # TEMP: plain-text admin password stored in password_hash
         if str(admin_row.get("password_hash") or "") != str(password):
             st.error("Incorrect password.")
             st.stop()
@@ -62,7 +60,6 @@ if st.button("Login", use_container_width=True):
         st.success("Admin login successful!")
         st.rerun()
 
-    # SALESPERSON / RP LOGIN
     else:
         try:
             user_row = login_public_user(email, password)
