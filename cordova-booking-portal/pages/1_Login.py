@@ -2,13 +2,13 @@
 import streamlit as st
 from config.settings import SESSION_KEYS
 from utils.auth import login_public_user, set_logged_in, logout
-from db.connection import get_supabase
+from db.connection import get_supabase, get_supabase_admin
 
-st.set_page_config(page_title="Login | Cordova Booking Portal", layout="centered")
 st.title("Cordova Publications Online Booking Portal")
 st.subheader("Login")
 
 supabase = get_supabase()
+supabase_admin = get_supabase_admin()  # IMPORTANT: bypass RLS for admin lookup
 
 # If already logged in
 if st.session_state.get(SESSION_KEYS["logged_in"]):
@@ -34,17 +34,18 @@ if st.button("Login", use_container_width=True):
         st.stop()
 
     # -------------------------
-    # ADMIN LOGIN (separate)
+    # ADMIN LOGIN (RLS-SAFE)
     # -------------------------
     if role == "admin":
         res = (
-            supabase.table("users")
+            supabase_admin.table("users")
             .select("*")
-            .eq("email", email)
+            .ilike("email", email.strip())
             .eq("role", "admin")
             .limit(1)
             .execute()
         )
+
         rows = res.data or []
         if not rows:
             st.error("Admin not found in users table.")
@@ -52,37 +53,18 @@ if st.button("Login", use_container_width=True):
 
         admin_row = rows[0]
 
-        # Allow login only if active (optional but good)
         if admin_row.get("is_active") is False:
             st.error("Admin account is inactive.")
             st.stop()
 
-        # ---- Password check ----
-        # If you already migrated admin password_hash using the new PBKDF2 format,
-        # then verify via login_public_user().
-        # Otherwise, temporarily support your old plain-text admin password (like before).
-        try:
-            # Try new hashed system
-            user_row = login_public_user(email, password)
+        # TEMP: your current admin password is stored plain-text in password_hash
+        if str(admin_row.get("password_hash") or "") != str(password):
+            st.error("Incorrect password.")
+            st.stop()
 
-            # Must be admin
-            if (user_row.get("role") or "").lower() != "admin":
-                st.error("This account is not admin.")
-                st.stop()
-
-            set_logged_in("admin", email, user_row, {})
-            st.success("Admin login successful!")
-            st.rerun()
-
-        except Exception:
-            # Fallback: old plain-text compare (ONLY for admin, temporary)
-            if str(admin_row.get("password_hash") or "") != str(password):
-                st.error("Incorrect password.")
-                st.stop()
-
-            set_logged_in("admin", email, admin_row, {})
-            st.success("Admin login successful!")
-            st.rerun()
+        set_logged_in("admin", email, admin_row, {})
+        st.success("Admin login successful!")
+        st.rerun()
 
     # -------------------------
     # SALESPERSON / RP LOGIN
