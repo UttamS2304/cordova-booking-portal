@@ -5,6 +5,8 @@ from config.settings import SESSION_KEYS
 from db.connection import get_supabase
 from utils.auth import logout
 from db.allocation import assign_rp, available_slots_summary
+from postgrest.exceptions import APIError
+
 
 st.title("Salesperson Dashboard")
 
@@ -114,6 +116,7 @@ with tabs[1]:
         if chosen_subject != "All":
             subject_id_filter = next(s["id"] for s in subjects if s["name"] == chosen_subject)
 
+    try:
     res = (
         supabase.table("bookings")
         .select("""
@@ -132,7 +135,16 @@ with tabs[1]:
         .order("date", desc=True)
         .execute()
     )
-    rows = res.data or []
+except APIError as e:
+    st.error("Supabase query failed (REAL error below).")
+    # This contains the real Postgres error message like: column ... does not exist
+    if e.args:
+        st.json(e.args[0])
+    else:
+        st.write(str(e))
+    st.stop()
+
+rows = res.data or []
 
     def in_range(d):
         if filter_range == "All":
@@ -409,4 +421,5 @@ with tabs[3]:
 
         st.success("Feedback submitted successfully ✅")
         st.rerun()
+
 
