@@ -1,17 +1,23 @@
+# pages/2_Salesperson.py
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
+
 from config.settings import SESSION_KEYS
 from db.connection import get_supabase
 from utils.auth import logout
 from db.allocation import assign_rp, available_slots_summary
 
 
-def show_db_error(e: Exception, title: str = "Supabase query failed (REAL error below)."):
+def show_db_error(e: Exception, title: str = "Supabase query failed."):
     st.error(title)
+    # try to print real Postgrest error
     try:
         raw = getattr(e, "args", [None])[0]
-        st.code(str(raw))
+        if isinstance(raw, dict):
+            st.code(str(raw))
+        else:
+            st.code(str(e))
     except Exception:
         st.code(str(e))
 
@@ -39,7 +45,7 @@ supabase = get_supabase()
 with st.sidebar:
     st.subheader("Salesperson Controls")
     st.write(f"Logged in as: **{user_row.get('email')}**")
-    if st.button("Logout"):
+    if st.button("Logout", use_container_width=True):
         logout()
         st.rerun()
 
@@ -55,13 +61,13 @@ with tabs[0]:
     try:
         res = (
             supabase.table("bookings")
-            .select("id, status, date")
+            .select("id, status, date, session_type_id")
             .eq("salesperson_id", salesperson_id)
             .execute()
         )
         all_bookings = res.data or []
     except Exception as e:
-        show_db_error(e)
+        show_db_error(e, "Unable to load bookings.")
         st.stop()
 
     def count_where(fn):
@@ -82,14 +88,13 @@ with tabs[0]:
 
     st.divider()
     st.subheader("Notifications (basic)")
-    last10 = sorted(all_bookings, key=lambda x: x.get("date", ""), reverse=True)[:10]
 
+    last10 = sorted(all_bookings, key=lambda x: x.get("date", ""), reverse=True)[:10]
     if not last10:
         st.info("No notifications yet.")
     else:
         for b in last10:
-            st.write(f"• Booking **{b.get('id')[:6]}** is **{b.get('status')}** for **{b.get('date')}**")
-
+            st.write(f"• Booking **{(b.get('id') or '')[:6]}** is **{b.get('status')}** for **{b.get('date')}**")
 
 # -------------------------
 # TAB 2: MY BOOKINGS
@@ -100,39 +105,48 @@ with tabs[1]:
     fcol1, fcol2, fcol3 = st.columns(3)
 
     with fcol1:
-        filter_range = st.selectbox("Date Filter", ["All", "Today", "Tomorrow", "This Week"], key="sp_date_filter")
+        filter_range = st.selectbox("Date Filter", ["All", "Today", "Tomorrow", "This Week"], key="mybookings_date_filter")
 
     with fcol2:
-        filter_status = st.selectbox("Status Filter", ["All", "Pending", "Approved", "Completed", "Rejected", "Cancelled"], key="sp_status_filter")
+        filter_status = st.selectbox("Status Filter", ["All", "Pending", "Approved", "Completed", "Rejected", "Cancelled"], key="mybookings_status_filter")
 
     with fcol3:
-        subject_filter_on = st.checkbox("Show Subject Filter", value=False, key="sp_subject_filter_on")
+        subject_filter_on = st.checkbox("Show Subject Filter", value=False, key="mybookings_subject_filter_toggle")
 
     subject_id_filter = None
-    try:
-        subjects = supabase.table("subjects").select("id,name").execute().data or []
-        subject_map = {s["id"]: s["name"] for s in subjects}
-    except Exception as e:
-        show_db_error(e, "Subjects table query failed.")
-        st.stop()
-
+    subjects = []
     if subject_filter_on:
+        try:
+            subjects = (
+                supabase.table("subjects")
+                .select("id,name")
+                .order("name")
+                .execute()
+            ).data or []
+        except Exception as e:
+            show_db_error(e, "Unable to load subjects.")
+            st.stop()
+
         subject_names = ["All"] + [s["name"] for s in subjects]
-        chosen_subject = st.selectbox("Subject", subject_names, key="sp_subject_pick")
+        chosen_subject = st.selectbox("Subject", subject_names, key="mybookings_subject_filter_select")
         if chosen_subject != "All":
-            subject_id_filter = next(s["id"] for s in subjects if s["name"] == chosen_subject)
+            match = [s for s in subjects if s["name"] == chosen_subject]
+            subject_id_filter = match[0]["id"] if match else None
 
     try:
         res = (
             supabase.table("bookings")
-            .select("id,date,status,topic,title_name,session_type_id,subject_id,slot_id,school_id,rp_id")
+            .select("""
+                id, date, status, topic, title_name,
+                session_type_id, subject_id, slot_id, school_id, rp_id
+            """)
             .eq("salesperson_id", salesperson_id)
             .order("date", desc=True)
             .execute()
         )
         rows = res.data or []
     except Exception as e:
-        show_db_error(e)
+        show_db_error(e, "Unable to load your bookings.")
         st.stop()
 
     def in_range(d):
@@ -150,8 +164,10 @@ with tabs[1]:
         return True
 
     filtered = [r for r in rows if in_range(r.get("date"))]
+
     if filter_status != "All":
         filtered = [r for r in filtered if r.get("status") == filter_status]
+
     if subject_id_filter:
         filtered = [r for r in filtered if r.get("subject_id") == subject_id_filter]
 
@@ -161,16 +177,17 @@ with tabs[1]:
 
     df = pd.DataFrame(filtered)
 
-    # Lookups
     try:
+        subjects = supabase.table("subjects").select("id,name").execute().data or []
         schools = supabase.table("schools").select("id,name").execute().data or []
         rps = supabase.table("resource_persons").select("id,display_name").execute().data or []
         session_types = supabase.table("session_types").select("id,name").execute().data or []
         slots = supabase.table("slots").select("id,start_time,end_time").execute().data or []
     except Exception as e:
-        show_db_error(e, "Lookup tables query failed.")
+        show_db_error(e, "Unable to load lookup tables.")
         st.stop()
 
+    subject_map = {s["id"]: s["name"] for s in subjects}
     school_map = {s["id"]: s["name"] for s in schools}
     rp_map = {r["id"]: r["display_name"] for r in rps}
     st_map = {t["id"]: t["name"] for t in session_types}
@@ -183,8 +200,8 @@ with tabs[1]:
     df["Slot"] = df["slot_id"].map(slot_map)
 
     show_cols = ["date", "Slot", "Subject", "School", "Session Type", "topic", "title_name", "RP", "status", "id"]
+    show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(df[show_cols], use_container_width=True)
-
 
 # -------------------------
 # TAB 3: NEW BOOKING
@@ -198,12 +215,22 @@ with tabs[2]:
         st.markdown(f"### {tab_name} Booking Form")
 
         try:
-            subjects = supabase.table("subjects").select("id,name").eq("is_active", True).order("name").execute().data or []
-            slots = supabase.table("slots").select("id,start_time,end_time,duration_minutes").eq("is_active", True).order("start_time").execute().data or []
-            session_types = supabase.table("session_types").select("id,name,duration_minutes").eq("is_active", True).order("name").execute().data or []
-            schools = supabase.table("schools").select("id,name,city").eq("is_active", True).order("name").execute().data or []
+            subjects = supabase.table("subjects").select("id,name").order("name").execute().data or []
+            slots = supabase.table("slots").select("id,start_time,end_time,duration_minutes").order("start_time").execute().data or []
+            session_types = supabase.table("session_types").select("id,name,duration_minutes").order("name").execute().data or []
+            schools = supabase.table("schools").select("id,name,city").order("name").execute().data or []
         except Exception as e:
-            show_db_error(e, "Master data fetch failed.")
+            show_db_error(e, "Unable to load dropdown data for booking form.")
+            return
+
+        if not subjects:
+            st.warning("No subjects found in DB.")
+            return
+        if not slots:
+            st.warning("No slots found in DB.")
+            return
+        if not session_types:
+            st.warning("No session types found in DB.")
             return
 
         subject_map = {s["name"]: s["id"] for s in subjects}
@@ -220,14 +247,20 @@ with tabs[2]:
             new_school_city = st.text_input("City*", key=f"{prefix}_new_school_city")
 
         city = st.text_input("City*", value=new_school_city if new_school_city else "", key=f"{prefix}_city")
-        booking_date = st.date_input("Date*", value=None, key=f"{prefix}_date")
+
+        # IMPORTANT: do NOT use value=None (can crash)
+        booking_date = st.date_input("Date*", value=date.today(), key=f"{prefix}_date")
 
         subject_name = st.selectbox("Subject*", ["Select Subject"] + list(subject_map.keys()), key=f"{prefix}_subject")
         session_name = st.selectbox("Session Type*", ["Select Type"] + list(session_map.keys()), key=f"{prefix}_session_type")
 
-        if subject_name != "Select Subject" and booking_date and session_name != "Select Type":
+        if subject_name != "Select Subject" and session_name != "Select Type":
             try:
-                summary = available_slots_summary(subject_map[subject_name], str(booking_date), session_map[session_name])
+                summary = available_slots_summary(
+                    subject_map[subject_name],
+                    str(booking_date),
+                    session_map[session_name]
+                )
                 df_sum = pd.DataFrame(summary)
                 if not df_sum.empty:
                     df_sum["Slot"] = df_sum.apply(lambda r: f'{r["start_time"]} - {r["end_time"]}', axis=1)
@@ -236,8 +269,8 @@ with tabs[2]:
                     st.info("Available slots for selected subject/date/type:")
                     st.dataframe(df_sum, use_container_width=True)
             except Exception as e:
-                show_db_error(e, "Slot availability failed.")
-                return
+                show_db_error(e, "Slot availability check failed.")
+                # don’t return; allow booking attempt anyway
 
         slot_label = st.selectbox("Slot*", ["Select Slot"] + list(slot_label_map.keys()), key=f"{prefix}_slot")
 
@@ -245,8 +278,8 @@ with tabs[2]:
         grade_of_school = st.text_input("Grade of School*", placeholder="Primary / Secondary etc.", key=f"{prefix}_grade")
         curriculum = st.text_input("Curriculum*", placeholder="CBSE / ICSE / State etc.", key=f"{prefix}_curriculum")
 
-        topic = st.text_input("Topic*", key=f"{prefix}_topic")
-        title_name = st.text_input("Title Name*", key=f"{prefix}_title")
+        topic = st.text_input("Topic*", placeholder="Mandatory for all", key=f"{prefix}_topic")
+        title_name = st.text_input("Title Name*", placeholder="Mandatory for all", key=f"{prefix}_title")
         notes = st.text_area("Notes (optional)", key=f"{prefix}_notes")
 
         if st.button(f"Submit {tab_name} Booking", use_container_width=True, key=f"{prefix}_submit"):
@@ -254,8 +287,6 @@ with tabs[2]:
                 st.error("Please select or add a school."); return
             if school_choice == "➕ Add New School" and (not new_school_name or not city):
                 st.error("Please enter new school name and city."); return
-            if not booking_date:
-                st.error("Please select date."); return
             if subject_name == "Select Subject":
                 st.error("Please select subject."); return
             if session_name == "Select Type":
@@ -268,8 +299,13 @@ with tabs[2]:
                 st.error("Topic and Title Name are mandatory."); return
 
             try:
+                # Resolve / create school
                 if school_choice == "➕ Add New School":
-                    sc_res = supabase.table("schools").insert({"name": new_school_name, "city": city, "is_active": True}).execute()
+                    sc_res = supabase.table("schools").insert({
+                        "name": new_school_name,
+                        "city": city,
+                        "is_active": True
+                    }).execute()
                     school_id = (sc_res.data or [None])[0]["id"]
                 else:
                     school_id = next(sc["id"] for sc in schools if sc["name"] == school_choice)
@@ -278,7 +314,14 @@ with tabs[2]:
                 slot_id = slot_label_map[slot_label]
                 session_type_id = session_map[session_name]
 
-                rp_id = assign_rp(subject_id=subject_id, slot_id=slot_id, booking_date=str(booking_date), session_type_id=session_type_id, school_id=school_id)
+                rp_id = assign_rp(
+                    subject_id=subject_id,
+                    slot_id=slot_id,
+                    booking_date=str(booking_date),
+                    session_type_id=session_type_id,
+                    school_id=school_id
+                )
+
                 if not rp_id:
                     st.error("No Resource Person available for this slot/subject. Try another slot.")
                     return
@@ -308,14 +351,14 @@ with tabs[2]:
                 st.write("Booking ID:", booking_row["id"])
 
             except Exception as e:
-                show_db_error(e, "Booking insert failed. (Most likely missing columns in bookings table)")
+                show_db_error(e, "Booking submission failed.")
                 return
 
     with subtab[0]:
         booking_form("Creative Kids")
+
     with subtab[1]:
         booking_form("Little Genius")
-
 
 # -------------------------
 # TAB 4: FEEDBACK
@@ -324,16 +367,20 @@ with tabs[3]:
     st.subheader("Submit Feedback (Completed Sessions)")
 
     try:
-        completed_rows = (
+        completed_res = (
             supabase.table("bookings")
-            .select("id,date,status,topic,title_name,subject_id,slot_id,school_id,session_type_id,rp_id")
+            .select("""
+                id, date, status, topic, title_name,
+                subject_id, slot_id, school_id, session_type_id, rp_id
+            """)
             .eq("salesperson_id", salesperson_id)
             .eq("status", "Completed")
             .order("date", desc=True)
             .execute()
-        ).data or []
+        )
+        completed_rows = completed_res.data or []
     except Exception as e:
-        show_db_error(e)
+        show_db_error(e, "Unable to load completed bookings.")
         st.stop()
 
     if not completed_rows:
@@ -341,28 +388,31 @@ with tabs[3]:
         st.stop()
 
     try:
-        submitted_ids = {
-            f["booking_id"]
-            for f in (supabase.table("feedback").select("booking_id").eq("salesperson_id", salesperson_id).execute().data or [])
-        }
+        fb_res = (
+            supabase.table("feedback")
+            .select("booking_id")
+            .eq("salesperson_id", salesperson_id)
+            .execute()
+        )
+        submitted_ids = {f["booking_id"] for f in (fb_res.data or [])}
     except Exception as e:
-        show_db_error(e, "Feedback table query failed.")
+        show_db_error(e, "Unable to load existing feedback.")
         st.stop()
 
     pending_feedback = [b for b in completed_rows if b["id"] not in submitted_ids]
+
     if not pending_feedback:
         st.success("All completed sessions already have feedback submitted ✅")
         st.stop()
 
-    # Lookups
     try:
         subjects = supabase.table("subjects").select("id,name").execute().data or []
-        schools = supabase.table("schools").select("id,name").execute().data or []
+        schools = supabase.table("schools").select("id,name,city").execute().data or []
         rps = supabase.table("resource_persons").select("id,display_name").execute().data or []
         session_types = supabase.table("session_types").select("id,name").execute().data or []
         slots = supabase.table("slots").select("id,start_time,end_time").execute().data or []
     except Exception as e:
-        show_db_error(e, "Lookup tables query failed.")
+        show_db_error(e, "Unable to load lookup tables.")
         st.stop()
 
     subject_map = {s["id"]: s["name"] for s in subjects}
@@ -407,7 +457,9 @@ with tabs[3]:
                 "school_feedback": school_feedback,
                 "notes": notes
             }).execute()
+
             st.success("Feedback submitted successfully ✅")
             st.rerun()
+
         except Exception as e:
-            show_db_error(e, "Feedback insert failed.")
+            show_db_error(e, "Feedback submission failed.")
