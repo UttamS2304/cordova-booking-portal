@@ -20,35 +20,25 @@ if (user_row.get("role") or "").lower() != "rp":
     st.error("You are not authorized to view this page.")
     st.stop()
 
-# IMPORTANT: use service-role client (bypass RLS while you finalize policies)
 supabase = get_supabase_admin()
-
 rp_user_id = user_row.get("id")
-if not rp_user_id:
-    st.error("Session error: user id missing. Please logout and login again.")
-    st.stop()
 
 # -------------------------
-# Find linked RP record
+# Find linked RP record (NO email column here)
 # -------------------------
-try:
-    rp_res = (
-        supabase.table("resource_persons")
-        .select("id, display_name, user_id, email")
-        .eq("user_id", rp_user_id)
-        .limit(1)
-        .execute()
-    )
-except Exception as e:
-    st.error(f"Could not read resource_persons. Check RLS/policies later. Error: {e}")
-    st.stop()
-
+rp_res = (
+    supabase.table("resource_persons")
+    .select("id, display_name, user_id")
+    .eq("user_id", rp_user_id)
+    .limit(1)
+    .execute()
+)
 rp_row = (rp_res.data or [None])[0]
+
 if not rp_row:
     st.error(
         "Your RP profile is not linked yet.\n\n"
-        "Admin must link your RP account in Admin → RP Linking.\n"
-        f"Login email: {user_row.get('email')}"
+        "Admin must link your RP account in Admin → RP Linking."
     )
     st.stop()
 
@@ -59,7 +49,7 @@ rp_id = rp_row["id"]
 # -------------------------
 with st.sidebar:
     st.subheader("RP Controls")
-    st.write(f"Logged in as: **{rp_row.get('display_name') or rp_row.get('email')}**")
+    st.write(f"Logged in as: **{rp_row.get('display_name') or user_row.get('email')}**")
     if st.button("Logout", use_container_width=True):
         logout()
         st.rerun()
@@ -118,7 +108,6 @@ with tabs[1]:
     st.subheader("My Assigned Classes")
 
     f1, f2, f3 = st.columns(3)
-
     with f1:
         filter_range = st.selectbox("Date Filter", ["Today", "Tomorrow", "This Week", "All"], key="rp_filter_range")
     with f2:
@@ -184,8 +173,7 @@ with tabs[1]:
 
     show_cols = [
         "date", "Slot", "Subject", "Session Type",
-        "School", "School City",
-        "topic", "title_name",
+        "School", "School City", "topic", "title_name",
         "status", "rp_attendance_status", "rp_session_notes", "id"
     ]
     st.dataframe(df[show_cols], use_container_width=True)
@@ -214,14 +202,14 @@ with tabs[1]:
     )
 
     if st.button("✅ Save Attendance & Notes", use_container_width=True, key="rp_save_attendance"):
-        update_payload = {
+        payload = {
             "rp_attendance_status": attendance_status,
             "rp_session_notes": session_notes,
             "rp_marked_at": datetime.utcnow().isoformat(),
         }
         if attendance_status == "Completed":
-            update_payload["status"] = "Completed"
+            payload["status"] = "Completed"
 
-        supabase.table("bookings").update(update_payload).eq("id", selected_booking["id"]).execute()
+        supabase.table("bookings").update(payload).eq("id", selected_booking["id"]).execute()
         st.success("Attendance & notes saved.")
         st.rerun()
