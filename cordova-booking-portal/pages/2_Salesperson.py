@@ -7,7 +7,6 @@ from db.connection import get_supabase
 from utils.auth import logout
 from db.allocation import assign_rp, available_slots_summary
 
-st.set_page_config(page_title="Salesperson | Cordova Booking Portal", layout="wide")
 st.title("Salesperson Dashboard")
 
 # -------------------------
@@ -270,7 +269,6 @@ with tabs[2]:
             if not topic or not title_name:
                 st.error("Topic and Title Name are mandatory."); return
 
-            # Resolve / create school
             if school_choice == "➕ Add New School":
                 sc_res = supabase.table("schools").insert({
                     "name": new_school_name,
